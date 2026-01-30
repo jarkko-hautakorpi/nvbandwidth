@@ -16,10 +16,39 @@
 #include "multinode_memcpy.h"
 #include <mpi.h>
 
+// Helper function to initialize multinode buffer for latency tests
+static void initializeMultinodeLatencyBuffer(MultinodeDeviceBuffer& buffer, size_t bufferSize, bool deviceMemory) {
+    // Only the owner rank initializes the buffer
+    if (worldRank != buffer.getMPIRank()) {
+        return;
+    }
+    
+    size_t numNodes = bufferSize / sizeof(struct LatencyNode);
+    
+    CUdeviceptr dataBuffer = (CUdeviceptr)buffer.getBuffer();
+    
+    // Set context for this device
+    CUcontext ctx = buffer.getPrimaryCtx();
+    CU_ASSERT(cuCtxSetCurrent(ctx));
+    
+    // Initialize linked list for pointer chasing
+    for (size_t i = 0; i < numNodes; i++) {
+        struct LatencyNode node;
+        // Create a chain: node[i] -> node[i+1] -> ... -> node[n-1] -> node[0]
+        node.next = (struct LatencyNode*)(dataBuffer + ((i + 1) % numNodes) * sizeof(struct LatencyNode));
+        
+        // Copy from host to device
+        CU_ASSERT(cuMemcpyHtoD(dataBuffer + i * sizeof(struct LatencyNode), 
+                              &node, sizeof(struct LatencyNode)));
+    }
+    
+    // Release context
+    CU_ASSERT(cuDevicePrimaryCtxRelease(localDevice));
+}
+
 // Multinode Device-to-Device Latency using pointer chase
 void MultinodeDeviceToDeviceLatencySM::run(unsigned long long size, unsigned long long loopCount) {
     // Create matrix to store latency values across all nodes
-    // Each MPI rank contributes its local GPU latencies to remote GPUs
     int totalGPUs = worldSize;
     PeerValueMatrix<double> latencyValues(totalGPUs, totalGPUs, key, perfFormatter, LATENCY);
     
@@ -27,28 +56,33 @@ void MultinodeDeviceToDeviceLatencySM::run(unsigned long long size, unsigned lon
     
     // Each rank tests from its local GPU to all remote GPUs
     for (int targetRank = 0; targetRank < worldSize; targetRank++) {
-        // Allocate buffer on target rank's GPU (using multinode buffer)
-        MultinodeDeviceBuffer targetBuffer(size, targetRank);
+        // Allocate buffer on target rank's GPU
+        MultinodeDeviceBufferUnicast targetBuffer(size, targetRank);
         
-        // Initialize the buffer for pointer chasing
-        if (worldRank == targetRank) {
-            latencyHelper(targetBuffer, true);
-        }
+        // Initialize the buffer for pointer chasing (only on owner rank)
+        initializeMultinodeLatencyBuffer(targetBuffer, size, true);
         
         // Synchronize to ensure buffer is initialized
         MPI_Barrier(MPI_COMM_WORLD);
         
         for (int srcRank = 0; srcRank < worldSize; srcRank++) {
             if (srcRank == targetRank) {
-                // Same-node latency is not measured in multinode test
+                // Skip same-node latency in multinode test
                 continue;
             }
             
             // Only the source rank performs the measurement
             if (worldRank == srcRank) {
+                // Set current device context
+                CUcontext ctx;
+                CU_ASSERT(cuDevicePrimaryCtxRetain(&ctx, localDevice));
+                CU_ASSERT(cuCtxSetCurrent(ctx));
+                
                 // Perform pointer chase from srcRank's GPU to targetRank's GPU
                 double latency = ptrChaseOp.doPtrChase(localDevice, targetBuffer);
                 latencyValues.value(srcRank, targetRank) = latency;
+                
+                CU_ASSERT(cuDevicePrimaryCtxRelease(localDevice));
             }
         }
         
@@ -58,7 +92,6 @@ void MultinodeDeviceToDeviceLatencySM::run(unsigned long long size, unsigned lon
     
     // Gather all latency values to rank 0 for output
     if (worldRank == 0) {
-        // Rank 0 already has its own measurements
         // Receive measurements from other ranks
         for (int srcRank = 1; srcRank < worldSize; srcRank++) {
             for (int targetRank = 0; targetRank < worldSize; targetRank++) {
@@ -74,7 +107,6 @@ void MultinodeDeviceToDeviceLatencySM::run(unsigned long long size, unsigned lon
         // Send measurements to rank 0
         for (int targetRank = 0; targetRank < worldSize; targetRank++) {
             if (worldRank != targetRank) {
-                // Extract value from optional
                 auto latency_opt = latencyValues.value(worldRank, targetRank);
                 if (latency_opt.has_value()) {
                     double latency = latency_opt.value();
@@ -102,19 +134,23 @@ void MultinodeHostDeviceLatencySM::run(unsigned long long size, unsigned long lo
     
     for (int targetRank = 0; targetRank < worldSize; targetRank++) {
         // Allocate buffer on target rank's GPU
-        MultinodeDeviceBuffer targetBuffer(size, targetRank);
+        MultinodeDeviceBufferUnicast targetBuffer(size, targetRank);
         
-        // Initialize buffer on target
-        if (worldRank == targetRank) {
-            latencyHelper(targetBuffer, false);
-        }
+        // Initialize buffer on target (host-accessible memory)
+        initializeMultinodeLatencyBuffer(targetBuffer, size, false);
         
         MPI_Barrier(MPI_COMM_WORLD);
         
         // Rank 0 measures latency to all GPUs
         if (worldRank == 0) {
+            CUcontext ctx;
+            CU_ASSERT(cuDevicePrimaryCtxRetain(&ctx, localDevice));
+            CU_ASSERT(cuCtxSetCurrent(ctx));
+            
             double latency = ptrChaseOp.doPtrChase(localDevice, targetBuffer);
             latencyValues.value(0, targetRank) = latency;
+            
+            CU_ASSERT(cuDevicePrimaryCtxRelease(localDevice));
         }
         
         MPI_Barrier(MPI_COMM_WORLD);
@@ -141,27 +177,37 @@ void MultinodeDeviceToDeviceBidirLatencySM::run(unsigned long long size, unsigne
         int rank2 = pairIdx + 1;
         
         // Allocate buffers on both ranks
-        MultinodeDeviceBuffer buffer1(size, rank1);
-        MultinodeDeviceBuffer buffer2(size, rank2);
+        MultinodeDeviceBufferUnicast buffer1(size, rank1);
+        MultinodeDeviceBufferUnicast buffer2(size, rank2);
         
         // Initialize buffers
-        if (worldRank == rank1 || worldRank == rank2) {
-            if (worldRank == rank1) latencyHelper(buffer1, true);
-            if (worldRank == rank2) latencyHelper(buffer2, true);
-        }
+        initializeMultinodeLatencyBuffer(buffer1, size, true);
+        initializeMultinodeLatencyBuffer(buffer2, size, true);
         
         MPI_Barrier(MPI_COMM_WORLD);
         
         // Measure rank1 -> rank2
         if (worldRank == rank1) {
+            CUcontext ctx;
+            CU_ASSERT(cuDevicePrimaryCtxRetain(&ctx, localDevice));
+            CU_ASSERT(cuCtxSetCurrent(ctx));
+            
             double latency = ptrChaseOp.doPtrChase(localDevice, buffer2);
             latencyValuesForward.value(rank1, rank2) = latency;
+            
+            CU_ASSERT(cuDevicePrimaryCtxRelease(localDevice));
         }
         
         // Measure rank2 -> rank1
         if (worldRank == rank2) {
+            CUcontext ctx;
+            CU_ASSERT(cuDevicePrimaryCtxRetain(&ctx, localDevice));
+            CU_ASSERT(cuCtxSetCurrent(ctx));
+            
             double latency = ptrChaseOp.doPtrChase(localDevice, buffer1);
             latencyValuesReverse.value(rank2, rank1) = latency;
+            
+            CU_ASSERT(cuDevicePrimaryCtxRelease(localDevice));
         }
         
         MPI_Barrier(MPI_COMM_WORLD);
@@ -189,7 +235,7 @@ void MultinodeDeviceToDeviceBidirLatencySM::run(unsigned long long size, unsigne
                 latencyValuesReverse.value(rank2, rank1) = latency;
             }
             
-            // Calculate RTT - extract values from optional
+            // Calculate RTT
             auto fwd_opt = latencyValuesForward.value(rank1, rank2);
             auto rev_opt = latencyValuesReverse.value(rank2, rank1);
             

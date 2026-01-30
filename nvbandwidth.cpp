@@ -99,6 +99,10 @@ std::vector<Testcase*> createTestcases() {
         new DeviceToDeviceLatencySM(),
         new DeviceLocalCopy(),
 #ifdef MULTINODE
+	// Add latency tests
+        new MultinodeDeviceToDeviceLatencySM(),
+        new MultinodeHostDeviceLatencySM(),
+        //new MultinodeDeviceToDeviceBidirLatencySM(),
         new MultinodeDeviceToDeviceReadCE(),
         new MultinodeDeviceToDeviceWriteCE(),
         new MultinodeDeviceToDeviceBidirReadCE(),
@@ -112,10 +116,6 @@ std::vector<Testcase*> createTestcases() {
         new MultinodeBroadcastOneToAllSM(),
         new MultinodeBroadcastAllToAllSM(),
         new MultinodeBisectWriteCE(),
-	// Add latency tests
-        new MultinodeDeviceToDeviceLatencySM(),
-        new MultinodeHostDeviceLatencySM(),
-        new MultinodeDeviceToDeviceBidirLatencySM(),
 #endif
     };
 }
