@@ -46,6 +46,7 @@ set(src
     nvbandwidth.cpp
     multinode_memcpy.cpp
     multinode_testcases.cpp
+    multinode_latency.cpp
     output.cpp
     json_output.cpp
     json/jsoncpp.cpp

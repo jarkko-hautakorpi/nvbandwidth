@@ -588,6 +588,41 @@ class MultinodeBisectWriteCE: public Testcase {
     void run(unsigned long long size, unsigned long long loopCount);
     bool filter() { return Testcase::filterHasMultipleGPUsMultinode(); }
 };
+
+
+
+// Multinode latency tests
+class MultinodeDeviceToDeviceLatencySM: public Testcase {
+public:
+    MultinodeDeviceToDeviceLatencySM() : Testcase("multinode_device_to_device_latency_sm",
+            "\tMeasures GPU-to-GPU access latency across NVLink domains using pointer chase.\n"
+            "\tTests latency between GPUs on different nodes in the NVL72 system.") {}
+    virtual ~MultinodeDeviceToDeviceLatencySM() {}
+    void run(unsigned long long size, unsigned long long loopCount);
+    bool filter() { return Testcase::filterHasMultipleGPUsMultinode(); }
+};
+
+class MultinodeHostDeviceLatencySM: public Testcase {
+public:
+    MultinodeHostDeviceLatencySM() : Testcase("multinode_host_device_latency_sm",
+            "\tMeasures CPU-to-GPU access latency across nodes.\n"
+            "\tTests from rank 0's CPU to all GPUs in the multinode system.") {}
+    virtual ~MultinodeHostDeviceLatencySM() {}
+    void run(unsigned long long size, unsigned long long loopCount);
+    bool filter() { return Testcase::filterHasMultipleGPUsMultinode(); }
+};
+
+class MultinodeDeviceToDeviceBidirLatencySM: public Testcase {
+public:
+    MultinodeDeviceToDeviceBidirLatencySM() : Testcase("multinode_device_to_device_bidir_latency_sm",
+            "\tMeasures bidirectional GPU-to-GPU latency (round-trip time).\n"
+            "\tTests both forward and reverse latency between adjacent nodes.") {}
+    virtual ~MultinodeDeviceToDeviceBidirLatencySM() {}
+    void run(unsigned long long size, unsigned long long loopCount);
+    bool filter() { return Testcase::filterHasMultipleGPUsMultinode(); }
+};
+
+
 #endif
 
 #endif  // TESTCASE_H_
