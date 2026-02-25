@@ -99,6 +99,10 @@ std::vector<Testcase*> createTestcases() {
         new DeviceToDeviceLatencySM(),
         new DeviceLocalCopy(),
 #ifdef MULTINODE
+	// Add latency tests
+        new MultinodeDeviceToDeviceLatencySM(),
+        new MultinodeHostDeviceLatencySM(),
+        //new MultinodeDeviceToDeviceBidirLatencySM(),
         new MultinodeDeviceToDeviceReadCE(),
         new MultinodeDeviceToDeviceWriteCE(),
         new MultinodeDeviceToDeviceBidirReadCE(),
@@ -163,13 +167,17 @@ void runTestcase(std::vector<Testcase*> &testcases, const std::string &testcaseI
 
         output->addTestcase(test->testKey(), NVB_RUNNING);
 
-        // Run the testcase
-        if (test->testKey() == "host_device_latency_sm" || test->testKey() == "device_to_device_latency_sm") {
-            // use fixd-size buffer for latency tests
-            test->run(2 * _MiB, loopCount);
-        } else {
-            test->run(bufferSize * _MiB, loopCount);
-        }
+	// Run the testcase
+	if (test->testKey() == "host_device_latency_sm" || 
+	    test->testKey() == "device_to_device_latency_sm" ||
+	    test->testKey() == "multinode_device_to_device_latency_sm" ||
+	    test->testKey() == "multinode_host_device_latency_sm" ||
+	    test->testKey() == "multinode_device_to_device_bidir_latency_sm") {
+	    // use fixed-size buffer for latency tests
+	    test->run(2 * _MiB, loopCount);
+	} else {
+	    test->run(bufferSize * _MiB, loopCount);
+	}
     } catch (std::string &s) {
         output->setTestcaseStatusAndAddIfNeeded(test->testKey(), NVB_ERROR_STATUS, s);
     }
